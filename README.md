@@ -361,4 +361,11 @@ docker ps
 cd /opt/stacks
 ```
 
+## Recommended SSH Access
+
+Gunakan Tailscale sebagai jalur SSH utama karena lebih stabil dibanding public IP provider.
+
+```powershell
+ssh awesome@TAILSCALE_IP -p 22022
+
 VPS siap digunakan.
