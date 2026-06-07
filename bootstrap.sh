@@ -68,30 +68,14 @@ fi
 echo "[+] Adding ${USERNAME} to sudo and users group..."
 usermod -aG sudo,users "$USERNAME"
 
-# --------------------------------------------------
-# Set random password & save to credentials file
-# --------------------------------------------------
-PASSWORD=$(tr -dc 'A-Za-z0-9!@#$%^&*_-' < /dev/urandom | head -c 16 2>/dev/null || openssl rand -base64 12)
-echo "${USERNAME}:${PASSWORD}" | chpasswd
+echo "[+] Giving ${USERNAME} NOPASSWD sudo (disposable VPS)..."
+cat > /etc/sudoers.d/${USERNAME} << EOF
+${USERNAME} ALL=(ALL) NOPASSWD:ALL
+EOF
+chmod 440 /etc/sudoers.d/${USERNAME}
 
 mkdir -p "$SCRIPT_DIR"
-cat > "${SCRIPT_DIR}/.credentials.txt" << EOF
-=================================
-VPS Credentials
-=================================
-User:     ${USERNAME}
-Password: ${PASSWORD}
-SSH Port: ${SSH_PORT}
-Hostname: $(hostname)
-Created:  $(date)
-=================================
-Login:
-  ssh ${USERNAME}@YOUR_PUBLIC_IP -p ${SSH_PORT}
-  or via Tailscale: ssh ${USERNAME}@awesome-vps
-=================================
-EOF
-chmod 600 "${SCRIPT_DIR}/.credentials.txt"
-chown -R "${USERNAME}:${USERNAME}" "$SCRIPT_DIR"
+chown "${USERNAME}:${USERNAME}" "$SCRIPT_DIR"
 
 # --------------------------------------------------
 # SSH key directory (empty — Tailscale SSH handles auth)
@@ -342,7 +326,6 @@ echo "     ssh awesome@awesome-vps"
 echo ""
 echo "  ─── OR via public IP (fallback) ───"
 echo "     ssh awesome@PUBLIC_IP -p ${SSH_PORT}"
-echo "     Password: ${PASSWORD}"
 echo ""
 echo "  ─── Directories ───"
 echo "     /opt/stacks   → Docker Compose services"

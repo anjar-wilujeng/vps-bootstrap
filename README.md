@@ -40,7 +40,7 @@ chmod +x bootstrap.sh
 | Step | Detail |
 |------|--------|
 | **System** | Update packages + install tools (curl, git, ufw, fail2ban, unattended-upgrades, dll) |
-| **User** | Membuat user `awesome`, set password random, sudo + docker group |
+| **User** | Membuat user `awesome`, NOPASSWD sudo, docker group |
 | **SSH** | Port diubah ke `22022`, konfigurasi keepalive |
 | **Docker** | Install Docker Engine + Compose, log rotation 10MB |
 | **Firewall** | UFW aktif: port 22022, 80, 443 |
@@ -94,7 +94,7 @@ zsh --version    # → terinstall
 |------|--------|
 | `/opt/stacks` | Tempat semua Docker Compose service |
 | `/opt/backups` | Backup sementara |
-| `/opt/scripts` | Script tambahan + `.credentials.txt` |
+| `/opt/scripts` | Script tambahan |
 
 ### Struktur contoh
 
