@@ -56,11 +56,15 @@ chmod +x bootstrap.sh
 
 ### 1. Login ke Tailscale
 
-```bash
-tailscale up --ssh
-```
+Script **otomatis** menjalankan `tailscale up --ssh --hostname=awesome-vps` di
+akhir. Saat **link login muncul di output**, buka di browser dan otorisasi
+mesin ini — script menunggu sampai login selesai.
 
-Buka link yang muncul di browser, login akun Tailscale kamu.
+Kalau tadi sempat di-skip (Ctrl-C), jalankan manual:
+
+```bash
+tailscale up --ssh --hostname=awesome-vps
+```
 
 ### 2. Test koneksi dari laptop
 
@@ -178,11 +182,10 @@ ufw status verbose          # SSH harus muncul "ALLOW IN ... on tailscale0"
 Dapat VPS baru → lakukan ini:
 
 ```bash
-# 1. 1 baris — semua beres
+# 1. 1 baris — semua beres (script otomatis 'tailscale up --ssh' di akhir)
 bash <(curl -fsSL https://raw.githubusercontent.com/anjar-wilujeng/vps-bootstrap/main/go.sh)
 
-# 2. Login Tailscale
-tailscale up --ssh
+# 2. Saat link login Tailscale muncul → buka di browser, otorisasi
 
 # 3. Dari laptop — langsung masuk, IP tetap resolve
 ssh awesome-vps

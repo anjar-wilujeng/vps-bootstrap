@@ -252,12 +252,8 @@ else
 fi
 
 systemctl enable --now tailscaled
-
-# Pre-set hostname so Tailscale SSH works with consistent name
-# User still needs to run: tailscale up --ssh
-# After that: ssh USERNAME@awesome-vps from laptop
-echo "[+] Pre-configuring Tailscale hostname..."
-tailscale set --hostname=awesome-vps 2>/dev/null || true
+# Note: hostname + SSH are set later via 'tailscale up --ssh --hostname=...'
+# (setting the hostname only works AFTER the node is authenticated/up).
 
 # --------------------------------------------------
 # Timezone
@@ -286,6 +282,19 @@ echo " Rescue: provider web console"
 echo "============================"
 MOTDEOF
 chmod +x /etc/update-motd.d/99-vps-bootstrap
+
+# --------------------------------------------------
+# Tailscale: bring up with SSH + hostname (interactive login)
+# --------------------------------------------------
+echo ""
+echo "============================================"
+echo "[+] Bringing up Tailscale with SSH enabled..."
+echo "    -> If a login URL appears below, open it in your browser"
+echo "       and authorize this machine. The script waits here until"
+echo "       login completes (Ctrl-C to skip and do it manually later)."
+echo "============================================"
+tailscale up --ssh --hostname=awesome-vps \
+  || echo "[!] 'tailscale up' not completed. Run manually: tailscale up --ssh --hostname=awesome-vps"
 
 # --------------------------------------------------
 # Health checks
@@ -318,6 +327,7 @@ check "User in sudo group"      groups "$USERNAME" | grep -q sudo
 check "Zsh installed"           command -v zsh
 check "Oh My Zsh installed"     [ -d "/home/${USERNAME}/.oh-my-zsh" ]
 check "Tailscale installed"     command -v tailscale
+check "Tailscale SSH active"    sh -c 'tailscale status >/dev/null 2>&1'
 
 # --------------------------------------------------
 # Done
@@ -329,16 +339,16 @@ echo "============================================"
 echo ""
 echo "  ✅ Health: ${HC_PASS} passed, ${HC_FAIL} failed"
 echo ""
-echo "  NEXT STEPS (do this now):"
+echo "  NEXT STEPS:"
 echo "  ─────────────────────────"
-echo "  1. tailscale up --ssh"
-echo "     -> Buka link login di browser, login akun Tailscale"
+echo "  • Jika tadi belum login Tailscale, jalankan:"
+echo "      tailscale up --ssh --hostname=awesome-vps"
 echo ""
-echo "  2. Cek IP Tailscale:"
-echo "     tailscale ip -4"
+echo "  • Cek IP Tailscale:"
+echo "      tailscale ip -4"
 echo ""
-echo "  3. Dari laptop, SSH via Tailscale (tanpa key/password):"
-echo "     ssh awesome@awesome-vps"
+echo "  • Dari laptop, SSH via Tailscale (tanpa key/password):"
+echo "      ssh awesome@awesome-vps"
 echo ""
 echo "  ⚠  SSH publik DIMATIKAN. Jika Tailscale bermasalah,"
 echo "     rescue lewat web console provider (Command line / Console)."
