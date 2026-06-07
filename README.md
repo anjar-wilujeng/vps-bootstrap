@@ -41,9 +41,9 @@ chmod +x bootstrap.sh
 |------|--------|
 | **System** | Update packages + install tools (curl, git, ufw, fail2ban, unattended-upgrades, dll) |
 | **User** | Membuat user `awesome`, NOPASSWD sudo, docker group |
-| **SSH** | Port diubah ke `22022`, konfigurasi keepalive |
+| **SSH** | `sshd` di-harden: **root login OFF, password login OFF**, hanya pubkey. SSH publik **tidak dibuka** |
 | **Docker** | Install Docker Engine + Compose, log rotation 10MB |
-| **Firewall** | UFW aktif: port 22022, 80, 443 |
+| **Firewall** | UFW aktif: **80 & 443 publik**, SSH **hanya lewat interface `tailscale0`** |
 | **Zsh** | Oh My Zsh + plugin autosuggestions & syntax-highlighting |
 | **Tailscale** | Install + set hostname `awesome-vps` |
 | **Security** | Unattended-upgrades untuk security patch otomatis |
@@ -65,15 +65,12 @@ Buka link yang muncul di browser, login akun Tailscale kamu.
 ### 2. Test koneksi dari laptop
 
 ```powershell
-# Cukup ini — Tailscale resolve otomatis:
+# Cukup ini — Tailscale SSH meng-auth via tailnet, tanpa password/key:
 ssh awesome@awesome-vps
 ```
 
-Atau via public IP (fallback):
-
-```powershell
-ssh awesome@PUBLIC_IP -p 22022
-```
+> **Tidak ada fallback public IP.** SSH publik sengaja ditutup. Kalau Tailscale
+> bermasalah, gunakan **web console provider** (lihat bagian Rescue).
 
 ### 3. Verifikasi
 
@@ -114,7 +111,7 @@ Edit `~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`):
 Host awesome-vps
     HostName awesome-vps
     User awesome
-    Port 22022
+    # Tanpa Port 22022 — Tailscale SSH memakai port default (22) di tailnet.
     ServerAliveInterval 15
     ServerAliveCountMax 10
     TCPKeepAlive yes
@@ -131,24 +128,28 @@ ssh awesome-vps
 
 ---
 
-## Rescue (jika SSH bermasalah)
+## Rescue (jika SSH/Tailscale bermasalah)
 
-Gunakan web console VPS:
+Akses **web console provider** (Spaceship: "Command line" / "Console") — ini
+out-of-band, tidak terpengaruh konfigurasi SSH maupun firewall. Lalu:
 
 ```bash
-# Cek SSH
-systemctl status ssh --no-pager
-ss -lntp | grep 22022
+# Cek Tailscale
+tailscale status
+systemctl restart tailscaled
+tailscale up --ssh
 
-# Cek firewall
-ufw status verbose
-ufw allow 22022/tcp
-ufw reload
+# Cek sshd & firewall
+systemctl status ssh --no-pager
+ufw status verbose          # SSH harus muncul "ALLOW IN ... on tailscale0"
 
 # Cek fail2ban
 fail2ban-client status sshd
 fail2ban-client unban --all
 ```
+
+> **Jangan** menjalankan `ufw allow 22022/tcp` — itu akan membuka SSH ke
+> internet publik dan membatalkan hardening. SSH cukup lewat `tailscale0`.
 
 ---
 

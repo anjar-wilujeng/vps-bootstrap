@@ -27,9 +27,11 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # --------------------------------------------------
-# Save current SSH IP as safety net (before firewall)
+# Rescue note
 # --------------------------------------------------
-CURRENT_SSH_IP=$(who -m | awk '{print $NF}' | tr -d '()' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || true)
+# No SSH-IP safety net needed: this VPS keeps an out-of-band web console
+# (Spaceship "Command line"/"Console") that is unaffected by SSH/firewall
+# config, so we can harden aggressively without risk of lockout.
 
 # --------------------------------------------------
 # Base packages
@@ -129,16 +131,24 @@ chown -R "${USERNAME}:${USERNAME}" "$STACK_DIR" "$BACKUP_DIR"
 echo "[+] Configuring SSH — port ${SSH_PORT} + hardening..."
 cat > /etc/ssh/sshd_config.d/99-custom.conf << EOF
 Port ${SSH_PORT}
+
+# --- Hardening ---
+# Primary access is Tailscale SSH; this system sshd is a tailnet-only
+# fallback (see UFW rule binding it to tailscale0). Root and password
+# logins are disabled — rescue is the provider web console.
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitEmptyPasswords no
+
 ClientAliveInterval 30
 ClientAliveCountMax 10
 TCPKeepAlive yes
 UseDNS no
-LoginGraceTime 60
-MaxAuthTries 6
+LoginGraceTime 30
+MaxAuthTries 3
 EOF
-
-# Keep password auth enabled (VPS via Tailscale is safe, user needs fallback)
-# Keep PermitRootLogin yes (disposable VPS, user's request)
 
 echo "[+] Checking SSH config..."
 sshd -t
@@ -151,13 +161,14 @@ systemctl reload ssh || systemctl reload sshd
 # --------------------------------------------------
 echo "[+] Configuring UFW firewall..."
 
-# Safety net: allow current SSH IP on port 22 so we don't lock out
-if [ -n "$CURRENT_SSH_IP" ]; then
-  echo "[+] Safety net: allowing ${CURRENT_SSH_IP} on port 22..."
-  ufw allow from "${CURRENT_SSH_IP}" to any port 22 proto tcp 2>/dev/null || true
-fi
+# SSH is NOT exposed publicly. Trust the whole Tailscale interface: this
+# allows both Tailscale SSH (port 22 on the tailnet) AND the fallback
+# system sshd on ${SSH_PORT}. The tailnet is private and ACL-controlled.
+# (The rule references tailscale0 even before the interface exists — it
+#  simply starts matching once tailscaled brings the interface up.)
+ufw allow in on tailscale0 comment "Trust Tailscale tailnet"
 
-ufw allow "${SSH_PORT}/tcp" comment "Custom SSH port"
+# Public services for Docker stacks
 ufw allow 80/tcp  comment "HTTP"
 ufw allow 443/tcp comment "HTTPS"
 ufw --force enable
@@ -260,13 +271,14 @@ echo "============================"
 echo " VPS Bootstrap"
 echo "============================"
 echo " User:    awesome"
-echo " SSH:     PORT 22022"
+echo " SSH:     Tailscale SSH only (no public SSH)"
 echo " Stacks:  /opt/stacks"
 echo " Scripts: /opt/scripts"
 echo "============================"
 echo " Tailscale:"
 echo "   tailscale up --ssh"
 echo "   tailscale ip -4"
+echo " Rescue: provider web console"
 echo "============================"
 MOTDEOF
 chmod +x /etc/update-motd.d/99-vps-bootstrap
@@ -316,16 +328,16 @@ echo ""
 echo "  NEXT STEPS (do this now):"
 echo "  ─────────────────────────"
 echo "  1. tailscale up --ssh"
-echo "     -> Buka link login di browser"
+echo "     -> Buka link login di browser, login akun Tailscale"
 echo ""
 echo "  2. Cek IP Tailscale:"
 echo "     tailscale ip -4"
 echo ""
-echo "  3. Dari laptop, SSH via Tailscale:"
+echo "  3. Dari laptop, SSH via Tailscale (tanpa key/password):"
 echo "     ssh awesome@awesome-vps"
 echo ""
-echo "  ─── OR via public IP (fallback) ───"
-echo "     ssh awesome@PUBLIC_IP -p ${SSH_PORT}"
+echo "  ⚠  SSH publik DIMATIKAN. Jika Tailscale bermasalah,"
+echo "     rescue lewat web console provider (Command line / Console)."
 echo ""
 echo "  ─── Directories ───"
 echo "     /opt/stacks   → Docker Compose services"
@@ -333,5 +345,4 @@ echo "     /opt/backups  → Backup files"
 echo "     /opt/scripts  → Helper scripts"
 echo ""
 echo "  Log file: ${LOGFILE}"
-echo "  Credentials saved to: ${SCRIPT_DIR}/.credentials.txt"
 echo "============================================"
