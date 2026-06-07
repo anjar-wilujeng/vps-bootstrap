@@ -111,7 +111,6 @@ Edit `~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`):
 Host awesome-vps
     HostName awesome-vps
     User awesome
-    # Tanpa Port 22022 — Tailscale SSH memakai port default (22) di tailnet.
     ServerAliveInterval 15
     ServerAliveCountMax 10
     TCPKeepAlive yes
