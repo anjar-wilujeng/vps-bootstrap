@@ -39,14 +39,14 @@ chmod +x bootstrap.sh
 
 | Step | Detail |
 |------|--------|
-| **System** | Update packages + install tools (curl, git, ufw, fail2ban, unattended-upgrades, dll) |
+| **System** | Update packages + install tools (curl, git, ufw, unattended-upgrades, dll) |
 | **User** | Membuat user `awesome`, NOPASSWD sudo, docker group |
 | **SSH** | `sshd` di-harden: **root login OFF, password login OFF**, hanya pubkey. SSH publik **tidak dibuka** |
-| **Docker** | Install Docker Engine + Compose, log rotation 10MB |
+| **Docker** | Install Docker Engine + Compose, log rotation 10MB, **default publish ke `127.0.0.1`** (tidak ada port bocor ke publik) |
 | **Firewall** | UFW aktif: **80 & 443 publik**, SSH **hanya lewat interface `tailscale0`** |
 | **Zsh** | Oh My Zsh + plugin autosuggestions & syntax-highlighting |
 | **Tailscale** | Install + set hostname `awesome-vps` |
-| **Security** | Unattended-upgrades untuk security patch otomatis |
+| **Security** | Unattended-upgrades untuk security patch otomatis (tanpa auto-reboot) |
 | **Timezone** | Asia/Jakarta |
 | **MOTD** | Banner info setelah login |
 
@@ -103,6 +103,31 @@ zsh --version    # → terinstall
 
 ---
 
+## Mengekspos Service (penting)
+
+Docker dikonfigurasi dengan `"ip": "127.0.0.1"` di `daemon.json`, jadi
+**publish port biasa otomatis hanya ke localhost** — tidak ada port yang bocor
+ke internet meski Docker biasanya menembus UFW.
+
+```yaml
+# Default aman — hanya bisa diakses dari dalam VPS (localhost):
+ports:
+  - "8080:80"          # → 127.0.0.1:8080
+```
+
+Cara mengaksesnya:
+
+| Tujuan | Cara |
+|--------|------|
+| **Web publik** (domain/HTTPS) | Reverse proxy via **Caddy** di port 80/443 → `localhost:8080` |
+| **Akses pribadi via tailnet** | Publish eksplisit ke IP Tailscale: `"100.x.y.z:8080:80"`, lalu buka `http://100.x.y.z:8080` |
+| **Akses pribadi (tanpa buka port)** | `tailscale serve 8080` — expose `localhost:8080` ke tailnet tanpa publish port sama sekali |
+
+> Jangan pakai `"0.0.0.0:8080:80"` kecuali memang sengaja mau publik — itu
+> menembus UFW dan membuka port ke internet.
+
+---
+
 ## SSH Config Laptop (untuk akses lebih nyaman)
 
 Edit `~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`):
@@ -141,10 +166,6 @@ tailscale up --ssh
 # Cek sshd & firewall
 systemctl status ssh --no-pager
 ufw status verbose          # SSH harus muncul "ALLOW IN ... on tailscale0"
-
-# Cek fail2ban
-fail2ban-client status sshd
-fail2ban-client unban --all
 ```
 
 > **Jangan** menjalankan `ufw allow 22022/tcp` — itu akan membuka SSH ke

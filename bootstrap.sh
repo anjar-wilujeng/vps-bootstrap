@@ -41,7 +41,7 @@ apt update
 
 echo "[+] Installing base packages..."
 DEBIAN_FRONTEND=noninteractive apt install -y \
-  sudo curl git tmux ufw fail2ban ca-certificates gnupg lsb-release \
+  sudo curl git tmux ufw ca-certificates gnupg lsb-release \
   unzip zip htop nano vim jq tree net-tools software-properties-common \
   zsh unattended-upgrades
 
@@ -55,6 +55,12 @@ APT::Periodic::Download-Upgradeable-Packages "1";
 APT::Periodic::AutocleanInterval "7";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
+
+# Never reboot automatically — user decides when to reboot.
+cat > /etc/apt/apt.conf.d/51unattended-upgrades-custom << EOF
+Unattended-Upgrade::Automatic-Reboot "false";
+EOF
+
 systemctl enable --now unattended-upgrades 2>/dev/null || true
 
 # --------------------------------------------------
@@ -113,9 +119,13 @@ cat > /etc/docker/daemon.json << EOF
   "log-opts": {
     "max-size": "10m",
     "max-file": "3"
-  }
+  },
+  "ip": "127.0.0.1"
 }
 EOF
+# "ip": "127.0.0.1" → a bare "-p 8080:80" binds to localhost only, never the
+# public interface. Expose web apps via Caddy (80/443) or publish explicitly
+# on the Tailscale IP (e.g. "-p 100.x.y.z:8080:80") for tailnet-only access.
 systemctl restart docker || true
 
 # --------------------------------------------------
@@ -248,12 +258,6 @@ systemctl enable --now tailscaled
 # After that: ssh USERNAME@awesome-vps from laptop
 echo "[+] Pre-configuring Tailscale hostname..."
 tailscale set --hostname=awesome-vps 2>/dev/null || true
-
-# --------------------------------------------------
-# Fail2ban
-# --------------------------------------------------
-echo "[+] Enabling fail2ban..."
-systemctl enable --now fail2ban 2>/dev/null || true
 
 # --------------------------------------------------
 # Timezone
