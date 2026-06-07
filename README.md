@@ -118,6 +118,7 @@ Host awesome-vps
     ServerAliveInterval 15
     ServerAliveCountMax 10
     TCPKeepAlive yes
+    IPQoS none
 ```
 
 Kemudian tinggal:
@@ -163,7 +164,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/anjar-wilujeng/vps-bootstrap
 tailscale up --ssh
 
 # 3. Dari laptop — langsung masuk, IP tetap resolve
-ssh awesome@awesome-vps
+ssh awesome-vps
 ```
 
 **VPS siap digunakan. 🎉**
