@@ -1,371 +1,169 @@
 # VPS Bootstrap
 
-Repository ini berisi script bootstrap untuk menyiapkan VPS disposable/trial dari kondisi fresh install.
+Setup VPS disposable dari kondisi **fresh install** cukup **1 baris perintah**.
 
-Default setup:
+## Cara Pakai
 
-* User Linux: `awesome`
-* SSH Port: `22022`
-* Working directory: `/opt/stacks`
-* Backup directory: `/opt/backups`
-* Script directory: `/opt/scripts`
-* Docker + Docker Compose
-* UFW firewall
-* Fail2ban
-* Zsh + Oh My Zsh
-* Tailscale
+### 🚀 1-Line Install (Recommended)
 
----
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/anjar-wilujeng/vps-bootstrap/main/go.sh)
+```
 
-## 1. Cara Menjalankan dari VPS Baru
+> **Jalankan di dalam `tmux`** agar tidak terputus jika koneksi SSH drop:
+> ```bash
+> # Sebelum curl, jalankan tmux dulu:
+> tmux new -s setup
+> ```
+> Jika koneksi putus, login ulang lalu `tmux attach -t setup`.
 
-Login ke VPS sebagai `root`, lalu jalankan:
+### Manual Install
+
+Kalau mau step-by-step (tanpa `go.sh`):
 
 ```bash
 apt update
 apt install -y git curl tmux
 
+tmux new -s setup
+
 git clone https://github.com/anjar-wilujeng/vps-bootstrap.git
 cd vps-bootstrap
-
 chmod +x bootstrap.sh
 ./bootstrap.sh
 ```
 
-Disarankan menjalankan script di dalam `tmux`:
+---
 
-```bash
-tmux new -s setup
-```
+## Yang Dilakukan Script
 
-Jika koneksi SSH putus, login ulang lalu attach lagi:
-
-```bash
-tmux attach -t setup
-```
+| Step | Detail |
+|------|--------|
+| **System** | Update packages + install tools (curl, git, ufw, fail2ban, unattended-upgrades, dll) |
+| **User** | Membuat user `awesome`, set password random, sudo + docker group |
+| **SSH** | Port diubah ke `22022`, konfigurasi keepalive |
+| **Docker** | Install Docker Engine + Compose, log rotation 10MB |
+| **Firewall** | UFW aktif: port 22022, 80, 443 |
+| **Zsh** | Oh My Zsh + plugin autosuggestions & syntax-highlighting |
+| **Tailscale** | Install + set hostname `awesome-vps` |
+| **Security** | Unattended-upgrades untuk security patch otomatis |
+| **Timezone** | Asia/Jakarta |
+| **MOTD** | Banner info setelah login |
 
 ---
 
-## 2. Setelah Script Selesai
+## Setelah Script Selesai
 
-Setelah `bootstrap.sh` selesai, jalankan Tailscale:
-
-```bash
-tailscale up
-```
-
-Buka link login yang muncul di browser, lalu cek IP Tailscale VPS:
+### 1. Login ke Tailscale
 
 ```bash
-tailscale ip -4
+tailscale up --ssh
 ```
 
-Contoh output:
+Buka link yang muncul di browser, login akun Tailscale kamu.
 
-```text
-100.xx.xx.xx
-```
-
-Login dari laptop/Windows menggunakan user `awesome`:
+### 2. Test koneksi dari laptop
 
 ```powershell
-ssh awesome@100.xx.xx.xx -p 22022
+# Cukup ini — Tailscale resolve otomatis:
+ssh awesome@awesome-vps
 ```
 
-Jika masih ingin menggunakan public IP VPS:
+Atau via public IP (fallback):
 
 ```powershell
-ssh awesome@PUBLIC_IP_VPS -p 22022
+ssh awesome@PUBLIC_IP -p 22022
 ```
 
-Namun akses via Tailscale lebih disarankan karena biasanya lebih stabil.
+### 3. Verifikasi
+
+```bash
+whoami           # → awesome
+groups           # → sudo, docker
+docker ps        # → tidak error permission
+zsh --version    # → terinstall
+```
+
+> **Catatan:** Jika `docker ps` masih permission denied, logout lalu login ulang.
 
 ---
 
-## 3. Verifikasi Setelah Login sebagai `awesome`
+## Direktori
 
-Setelah berhasil login sebagai user `awesome`, cek:
+| Path | Fungsi |
+|------|--------|
+| `/opt/stacks` | Tempat semua Docker Compose service |
+| `/opt/backups` | Backup sementara |
+| `/opt/scripts` | Script tambahan + `.credentials.txt` |
 
-```bash
-whoami
-groups
-docker ps
-zsh --version
+### Struktur contoh
+
 ```
-
-Expected:
-
-```text
-whoami  -> awesome
-groups  -> ada sudo dan docker
-docker ps -> tidak permission denied
-```
-
-Jika `docker ps` masih permission denied, logout lalu login ulang:
-
-```bash
-exit
-```
-
-Kemudian SSH lagi sebagai `awesome`.
-
----
-
-## 4. Struktur Direktori
-
-Script akan membuat direktori berikut:
-
-```text
-/opt/stacks
-/opt/backups
-/opt/scripts
-```
-
-Fungsinya:
-
-```text
-/opt/stacks   -> tempat semua Docker Compose service
-/opt/backups  -> tempat backup sementara
-/opt/scripts  -> tempat script tambahan
-```
-
-Contoh struktur service:
-
-```text
 /opt/stacks/caddy
 /opt/stacks/n8n
 /opt/stacks/uptime-kuma
-/opt/stacks/defectdojo
 ```
 
 ---
 
-## 5. Test Docker Compose
+## SSH Config Laptop (untuk akses lebih nyaman)
 
-Login sebagai `awesome`, lalu jalankan:
-
-```bash
-cd /opt/stacks
-mkdir hello
-cd hello
-nano docker-compose.yml
-```
-
-Isi file:
-
-```yaml
-services:
-  web:
-    image: nginx:alpine
-    ports:
-      - "8080:80"
-    restart: unless-stopped
-```
-
-Jalankan:
-
-```bash
-docker compose up -d
-docker ps
-curl http://127.0.0.1:8080
-```
-
-Jika muncul halaman `Welcome to nginx!`, berarti Docker Compose sudah berjalan normal.
-
-Untuk menghapus test stack:
-
-```bash
-cd /opt/stacks/hello
-docker compose down
-cd ..
-rm -rf hello
-```
-
----
-
-## 6. Command Harian
-
-Masuk ke folder stack:
-
-```bash
-cd /opt/stacks
-```
-
-Atau gunakan alias:
-
-```bash
-stacks
-```
-
-Menjalankan service Docker Compose:
-
-```bash
-docker compose up -d
-```
-
-Melihat container aktif:
-
-```bash
-docker ps
-```
-
-Melihat log service:
-
-```bash
-docker compose logs -f
-```
-
-Mematikan service:
-
-```bash
-docker compose down
-```
-
----
-
-## 7. SSH Keepalive dari Windows
-
-Jika koneksi SSH sering putus, buat file config di Windows:
-
-```powershell
-notepad $env:USERPROFILE\.ssh\config
-```
-
-Isi:
+Edit `~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`):
 
 ```sshconfig
 Host awesome-vps
-    HostName TAILSCALE_IP
+    HostName awesome-vps
     User awesome
     Port 22022
     ServerAliveInterval 15
     ServerAliveCountMax 10
     TCPKeepAlive yes
-    IPQoS none
 ```
 
-Lalu login cukup dengan:
+Kemudian tinggal:
 
 ```powershell
 ssh awesome-vps
 ```
 
+> **Catatan:** `HostName awesome-vps` bisa dipakai karena Tailscale MagicDNS me-resolve hostname ke IP Tailscale-nya.
+
 ---
 
-## 8. Rescue via Web Console
+## Rescue (jika SSH bermasalah)
 
-Jika SSH public atau Tailscale bermasalah, gunakan web console dari provider VPS.
-
-Cek SSH service:
+Gunakan web console VPS:
 
 ```bash
+# Cek SSH
 systemctl status ssh --no-pager
-ss -lntp | grep ssh
-```
+ss -lntp | grep 22022
 
-Cek firewall:
-
-```bash
+# Cek firewall
 ufw status verbose
-```
-
-Pastikan port `22022` terbuka:
-
-```bash
 ufw allow 22022/tcp
 ufw reload
-```
 
-Cek log SSH:
-
-```bash
-journalctl -u ssh --since "30 minutes ago" --no-pager | tail -100
-```
-
-Cek fail2ban:
-
-```bash
-fail2ban-client status
+# Cek fail2ban
 fail2ban-client status sshd
-```
-
-Unban semua IP jika perlu:
-
-```bash
 fail2ban-client unban --all
 ```
 
 ---
 
-## 9. Catatan Keamanan
+## Flow Ganti VPS Baru
 
-Jangan commit file berikut ke repository:
-
-```text
-.env
-private key
-API key
-password
-database dump
-backup asli
-token Tailscale
-credential production
-```
-
-Gunakan `.env.example` untuk contoh konfigurasi.
-
-Contoh:
-
-```text
-APP_PORT=8080
-APP_DOMAIN=example.com
-DATABASE_USER=changeme
-DATABASE_PASSWORD=changeme
-```
-
----
-
-## 10. Flow VPS Baru
-
-Ringkasan flow saat mendapat VPS trial baru:
+Dapat VPS baru → lakukan ini:
 
 ```bash
-ssh root@PUBLIC_IP -p PORT_PROVIDER
+# 1. 1 baris — semua beres
+bash <(curl -fsSL https://raw.githubusercontent.com/anjar-wilujeng/vps-bootstrap/main/go.sh)
 
-apt update
-apt install -y git curl tmux
+# 2. Login Tailscale
+tailscale up --ssh
 
-tmux new -s setup
-
-git clone https://github.com/anjar-wilujeng/vps-bootstrap.git
-cd vps-bootstrap
-
-chmod +x bootstrap.sh
-./bootstrap.sh
-
-tailscale up
-tailscale ip -4
+# 3. Dari laptop — langsung masuk, IP tetap resolve
+ssh awesome@awesome-vps
 ```
 
-Lalu dari Windows:
-
-```powershell
-ssh awesome@TAILSCALE_IP -p 22022
-```
-
-Setelah masuk:
-
-```bash
-whoami
-docker ps
-cd /opt/stacks
-```
-
-## Recommended SSH Access
-
-Gunakan Tailscale sebagai jalur SSH utama karena lebih stabil dibanding public IP provider.
-
-```powershell
-ssh awesome@TAILSCALE_IP -p 22022
-
-VPS siap digunakan.
+**VPS siap digunakan. 🎉**

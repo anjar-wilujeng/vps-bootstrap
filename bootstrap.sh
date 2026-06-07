@@ -1,33 +1,66 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ============================================================
+# VPS Bootstrap — one-shot setup for disposable VPS
+# ============================================================
+
 USERNAME="awesome"
 SSH_PORT="22022"
 STACK_DIR="/opt/stacks"
 BACKUP_DIR="/opt/backups"
 SCRIPT_DIR="/opt/scripts"
+LOGFILE="/var/log/vps-bootstrap.log"
 
-echo "[+] Starting VPS bootstrap..."
+# Redirect all output to log file + terminal
+exec > >(tee -a "$LOGFILE") 2>&1
 
+echo "[+] $(date) — VPS bootstrap started."
+echo "[+] Target user: ${USERNAME}, SSH port: ${SSH_PORT}"
+
+# --------------------------------------------------
+# Root check
+# --------------------------------------------------
 if [ "$(id -u)" -ne 0 ]; then
   echo "[!] Please run this script as root."
   exit 1
 fi
 
+# --------------------------------------------------
+# Save current SSH IP as safety net (before firewall)
+# --------------------------------------------------
+CURRENT_SSH_IP=$(who -m | awk '{print $NF}' | tr -d '()' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || true)
+
+# --------------------------------------------------
+# Base packages
+# --------------------------------------------------
 echo "[+] Updating package index..."
 apt update
 
 echo "[+] Installing base packages..."
-apt install -y \
+DEBIAN_FRONTEND=noninteractive apt install -y \
   sudo curl git tmux ufw fail2ban ca-certificates gnupg lsb-release \
   unzip zip htop nano vim jq tree net-tools software-properties-common \
-  zsh
+  zsh unattended-upgrades
 
+# --------------------------------------------------
+# Unattended upgrades (security patches)
+# --------------------------------------------------
+echo "[+] Configuring unattended-upgrades..."
+cat > /etc/apt/apt.conf.d/20auto-upgrades << EOF
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Download-Upgradeable-Packages "1";
+APT::Periodic::AutocleanInterval "7";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+systemctl enable --now unattended-upgrades 2>/dev/null || true
+
+# --------------------------------------------------
+# Create user
+# --------------------------------------------------
 echo "[+] Creating user: ${USERNAME}"
 if ! id "$USERNAME" >/dev/null 2>&1; then
   adduser --disabled-password --gecos "" "$USERNAME"
-  echo "[!] User ${USERNAME} created without password."
-  echo "[!] Set password manually later with: passwd ${USERNAME}"
 else
   echo "[=] User ${USERNAME} already exists."
 fi
@@ -35,22 +68,44 @@ fi
 echo "[+] Adding ${USERNAME} to sudo and users group..."
 usermod -aG sudo,users "$USERNAME"
 
-echo "[+] Copying root SSH authorized_keys to ${USERNAME}, if available..."
+# --------------------------------------------------
+# Set random password & save to credentials file
+# --------------------------------------------------
+PASSWORD=$(tr -dc 'A-Za-z0-9!@#$%^&*_-' < /dev/urandom | head -c 16 2>/dev/null || openssl rand -base64 12)
+echo "${USERNAME}:${PASSWORD}" | chpasswd
+
+mkdir -p "$SCRIPT_DIR"
+cat > "${SCRIPT_DIR}/.credentials.txt" << EOF
+=================================
+VPS Credentials
+=================================
+User:     ${USERNAME}
+Password: ${PASSWORD}
+SSH Port: ${SSH_PORT}
+Hostname: $(hostname)
+Created:  $(date)
+=================================
+Login:
+  ssh ${USERNAME}@YOUR_PUBLIC_IP -p ${SSH_PORT}
+  or via Tailscale: ssh ${USERNAME}@awesome-vps
+=================================
+EOF
+chmod 600 "${SCRIPT_DIR}/.credentials.txt"
+chown -R "${USERNAME}:${USERNAME}" "$SCRIPT_DIR"
+
+# --------------------------------------------------
+# SSH key directory (empty — Tailscale SSH handles auth)
+# --------------------------------------------------
+echo "[+] Preparing .ssh directory for ${USERNAME}..."
 mkdir -p "/home/${USERNAME}/.ssh"
-
-if [ -f /root/.ssh/authorized_keys ] && [ -s /root/.ssh/authorized_keys ]; then
-  cp /root/.ssh/authorized_keys "/home/${USERNAME}/.ssh/authorized_keys"
-  echo "[+] SSH key copied from root."
-else
-  touch "/home/${USERNAME}/.ssh/authorized_keys"
-  echo "[!] /root/.ssh/authorized_keys is empty or missing."
-  echo "[!] You may need to manually add your public key to /home/${USERNAME}/.ssh/authorized_keys"
-fi
-
+touch "/home/${USERNAME}/.ssh/authorized_keys"
 chown -R "${USERNAME}:${USERNAME}" "/home/${USERNAME}/.ssh"
 chmod 700 "/home/${USERNAME}/.ssh"
 chmod 600 "/home/${USERNAME}/.ssh/authorized_keys"
 
+# --------------------------------------------------
+# Docker
+# --------------------------------------------------
 echo "[+] Installing Docker..."
 if ! command -v docker >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com | sh
@@ -64,12 +119,32 @@ usermod -aG docker "$USERNAME"
 echo "[+] Enabling Docker service..."
 systemctl enable --now docker
 
-echo "[+] Creating working directories..."
-mkdir -p "$STACK_DIR" "$BACKUP_DIR" "$SCRIPT_DIR"
-chown -R "${USERNAME}:${USERNAME}" "$STACK_DIR" "$BACKUP_DIR" "$SCRIPT_DIR"
+echo "[+] Configuring Docker log rotation..."
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json << EOF
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}
+EOF
+systemctl restart docker || true
 
-echo "[+] Configuring SSH keepalive..."
-cat > /etc/ssh/sshd_config.d/99-custom-keepalive.conf << EOF
+# --------------------------------------------------
+# Working directories
+# --------------------------------------------------
+echo "[+] Creating working directories..."
+mkdir -p "$STACK_DIR" "$BACKUP_DIR"
+chown -R "${USERNAME}:${USERNAME}" "$STACK_DIR" "$BACKUP_DIR"
+
+# --------------------------------------------------
+# SSH hardening + port change
+# --------------------------------------------------
+echo "[+] Configuring SSH — port ${SSH_PORT} + hardening..."
+cat > /etc/ssh/sshd_config.d/99-custom.conf << EOF
+Port ${SSH_PORT}
 ClientAliveInterval 30
 ClientAliveCountMax 10
 TCPKeepAlive yes
@@ -78,43 +153,54 @@ LoginGraceTime 60
 MaxAuthTries 6
 EOF
 
+# Keep password auth enabled (VPS via Tailscale is safe, user needs fallback)
+# Keep PermitRootLogin yes (disposable VPS, user's request)
+
 echo "[+] Checking SSH config..."
 sshd -t
 
 echo "[+] Reloading SSH service..."
 systemctl reload ssh || systemctl reload sshd
 
+# --------------------------------------------------
+# UFW firewall
+# --------------------------------------------------
 echo "[+] Configuring UFW firewall..."
-ufw allow "${SSH_PORT}/tcp"
-ufw allow 80/tcp
-ufw allow 443/tcp
+
+# Safety net: allow current SSH IP on port 22 so we don't lock out
+if [ -n "$CURRENT_SSH_IP" ]; then
+  echo "[+] Safety net: allowing ${CURRENT_SSH_IP} on port 22..."
+  ufw allow from "${CURRENT_SSH_IP}" to any port 22 proto tcp 2>/dev/null || true
+fi
+
+ufw allow "${SSH_PORT}/tcp" comment "Custom SSH port"
+ufw allow 80/tcp  comment "HTTP"
+ufw allow 443/tcp comment "HTTPS"
 ufw --force enable
 ufw reload
 
+# --------------------------------------------------
+# Oh My Zsh + plugins
+# --------------------------------------------------
 echo "[+] Installing Oh My Zsh for ${USERNAME}..."
 if [ ! -d "/home/${USERNAME}/.oh-my-zsh" ]; then
-  sudo -u "$USERNAME" sh -c 'RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"'
+  sudo -u "$USERNAME" bash -c 'RUNZSH=no CHSH=no KEEP_ZSHRC=yes bash <(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)' </dev/null
 else
   echo "[=] Oh My Zsh already installed."
 fi
 
-echo "[+] Installing Zsh plugins..."
 ZSH_CUSTOM="/home/${USERNAME}/.oh-my-zsh/custom"
 
+echo "[+] Installing Zsh plugins..."
 if [ ! -d "${ZSH_CUSTOM}/plugins/zsh-autosuggestions" ]; then
-  sudo -u "$USERNAME" git clone https://github.com/zsh-users/zsh-autosuggestions.git "${ZSH_CUSTOM}/plugins/zsh-autosuggestions"
-else
-  echo "[=] zsh-autosuggestions already installed."
+  sudo -u "$USERNAME" git clone --depth=1 https://github.com/zsh-users/zsh-autosuggestions.git "${ZSH_CUSTOM}/plugins/zsh-autosuggestions"
 fi
-
 if [ ! -d "${ZSH_CUSTOM}/plugins/zsh-syntax-highlighting" ]; then
-  sudo -u "$USERNAME" git clone https://github.com/zsh-users/zsh-syntax-highlighting.git "${ZSH_CUSTOM}/plugins/zsh-syntax-highlighting"
-else
-  echo "[=] zsh-syntax-highlighting already installed."
+  sudo -u "$USERNAME" git clone --depth=1 https://github.com/zsh-users/zsh-syntax-highlighting.git "${ZSH_CUSTOM}/plugins/zsh-syntax-highlighting"
 fi
 
 echo "[+] Writing .zshrc..."
-cat > "/home/${USERNAME}/.zshrc" << 'EOF'
+cat > "/home/${USERNAME}/.zshrc" << 'ZSHRCEOF'
 export ZSH="$HOME/.oh-my-zsh"
 
 ZSH_THEME="robbyrussell"
@@ -143,13 +229,16 @@ alias scripts='cd /opt/scripts'
 alias backups='cd /opt/backups'
 
 export EDITOR=nano
-EOF
+ZSHRCEOF
 
 chown "${USERNAME}:${USERNAME}" "/home/${USERNAME}/.zshrc"
 
 echo "[+] Changing default shell to zsh for ${USERNAME}..."
 chsh -s "$(command -v zsh)" "$USERNAME"
 
+# --------------------------------------------------
+# Tailscale
+# --------------------------------------------------
 echo "[+] Installing Tailscale..."
 if ! command -v tailscale >/dev/null 2>&1; then
   curl -fsSL https://tailscale.com/install.sh | sh
@@ -159,63 +248,107 @@ fi
 
 systemctl enable --now tailscaled
 
-echo "[+] Configuring fail2ban basic status..."
-systemctl enable --now fail2ban || true
+# Pre-set hostname so Tailscale SSH works with consistent name
+# User still needs to run: tailscale up --ssh
+# After that: ssh USERNAME@awesome-vps from laptop
+echo "[+] Pre-configuring Tailscale hostname..."
+tailscale set --hostname=awesome-vps 2>/dev/null || true
 
-echo "[+] Creating helper info file..."
-cat > "${SCRIPT_DIR}/README-FIRST.txt" << EOF
-VPS bootstrap completed.
+# --------------------------------------------------
+# Fail2ban
+# --------------------------------------------------
+echo "[+] Enabling fail2ban..."
+systemctl enable --now fail2ban 2>/dev/null || true
 
-Default user:
-  ${USERNAME}
+# --------------------------------------------------
+# Timezone
+# --------------------------------------------------
+echo "[+] Setting timezone to Asia/Jakarta..."
+timedatectl set-timezone Asia/Jakarta 2>/dev/null || ln -sf /usr/share/zoneinfo/Asia/Jakarta /etc/localtime
 
-SSH public access:
-  ssh ${USERNAME}@YOUR_PUBLIC_IP -p ${SSH_PORT}
+# --------------------------------------------------
+# MOTD banner
+# --------------------------------------------------
+echo "[+] Creating MOTD banner..."
+cat > /etc/update-motd.d/99-vps-bootstrap << 'MOTDEOF'
+#!/bin/sh
+echo "============================"
+echo " VPS Bootstrap"
+echo "============================"
+echo " User:    awesome"
+echo " SSH:     PORT 22022"
+echo " Stacks:  /opt/stacks"
+echo " Scripts: /opt/scripts"
+echo "============================"
+echo " Tailscale:"
+echo "   tailscale up --ssh"
+echo "   tailscale ip -4"
+echo "============================"
+MOTDEOF
+chmod +x /etc/update-motd.d/99-vps-bootstrap
 
-Recommended access:
-  Use Tailscale, then:
-  ssh ${USERNAME}@TAILSCALE_IP -p ${SSH_PORT}
-
-Working directories:
-  ${STACK_DIR}
-  ${BACKUP_DIR}
-  ${SCRIPT_DIR}
-
-Useful commands:
-  docker ps
-  docker compose up -d
-  tmux new -s work
-  tmux attach -t work
-
-Next manual step:
-  Run: tailscale up
-EOF
-
-chown -R "${USERNAME}:${USERNAME}" "$SCRIPT_DIR"
-
+# --------------------------------------------------
+# Health checks
+# --------------------------------------------------
 echo ""
-echo "============================================================"
-echo "[+] VPS bootstrap completed."
-echo "============================================================"
+echo "============================================"
+echo "[+] Running health checks..."
+echo "============================================"
+
+HC_PASS=0
+HC_FAIL=0
+check() {
+  local label="$1"
+  shift
+  if "$@" >/dev/null 2>&1; then
+    echo "  ✅ ${label}"
+    HC_PASS=$((HC_PASS + 1))
+  else
+    echo "  ❌ ${label}"
+    HC_FAIL=$((HC_FAIL + 1))
+  fi
+}
+
+check "Docker running"          systemctl is-active docker
+check "SSH on port ${SSH_PORT}" ss -lntp | grep -q ":${SSH_PORT}"
+check "UFW active"              ufw status | grep -q "Status: active"
+check "User ${USERNAME}"        id "$USERNAME"
+check "User in docker group"    groups "$USERNAME" | grep -q docker
+check "User in sudo group"      groups "$USERNAME" | grep -q sudo
+check "Zsh installed"           command -v zsh
+check "Oh My Zsh installed"     [ -d "/home/${USERNAME}/.oh-my-zsh" ]
+check "Tailscale installed"     command -v tailscale
+
+# --------------------------------------------------
+# Done
+# --------------------------------------------------
 echo ""
-echo "User created:"
-echo "  ${USERNAME}"
+echo "============================================"
+echo "[+] VPS bootstrap completed! ($(date))"
+echo "============================================"
 echo ""
-echo "SSH command:"
-echo "  ssh ${USERNAME}@YOUR_PUBLIC_IP -p ${SSH_PORT}"
+echo "  ✅ Health: ${HC_PASS} passed, ${HC_FAIL} failed"
 echo ""
-echo "Recommended next step:"
-echo "  tailscale up"
+echo "  NEXT STEPS (do this now):"
+echo "  ─────────────────────────"
+echo "  1. tailscale up --ssh"
+echo "     -> Buka link login di browser"
 echo ""
-echo "After Tailscale login, check IP:"
-echo "  tailscale ip -4"
+echo "  2. Cek IP Tailscale:"
+echo "     tailscale ip -4"
 echo ""
-echo "Then login from Windows:"
-echo "  ssh ${USERNAME}@TAILSCALE_IP -p ${SSH_PORT}"
+echo "  3. Dari laptop, SSH via Tailscale:"
+echo "     ssh awesome@awesome-vps"
 echo ""
-echo "Working directory:"
-echo "  ${STACK_DIR}"
+echo "  ─── OR via public IP (fallback) ───"
+echo "     ssh awesome@PUBLIC_IP -p ${SSH_PORT}"
+echo "     Password: ${PASSWORD}"
 echo ""
-echo "Important:"
-echo "  If docker command fails for ${USERNAME}, logout and login again."
-echo "============================================================"
+echo "  ─── Directories ───"
+echo "     /opt/stacks   → Docker Compose services"
+echo "     /opt/backups  → Backup files"
+echo "     /opt/scripts  → Helper scripts"
+echo ""
+echo "  Log file: ${LOGFILE}"
+echo "  Credentials saved to: ${SCRIPT_DIR}/.credentials.txt"
+echo "============================================"
